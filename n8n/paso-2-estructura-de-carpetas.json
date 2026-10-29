@@ -1,0 +1,125 @@
+{
+  "name": "Informes - Paso 2: Estructura de carpetas y evidencias",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "31074c2b-2499-4722-a49b-0c4be91bf9d5",
+      "name": "When clicking ‘Execute workflow’",
+      "notesInFlow": true,
+      "notes": "Tipo de nodo: Manual Trigger\nFunción: Iniciar manualmente el workflow de generación inicial de carpetas.\n\nEste nodo sirve como punto de arranque del workflow 2, correspondiente a la primera versión de la Fábrica de Carpetas.\n\nAl ejecutarse manualmente, debe activar el proceso que lee las actividades aprobadas desde la hoja REVISION_IA y genera una estructura de carpetas de prueba por obligación y actividad.\n\nFlujo esperado:\n\nDisparador manual\n↓\nLECTOR_APROBADOS_REVISION_IA\n↓\nGENERAR_RUTAS_CARPETAS\n↓\nCREAR_CARPETA_ACTIVIDAD\n\nEste nodo no transforma datos. Solo dispara la ejecución manual del workflow."
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "<ID_DE_TU_GOOGLE_SHEET>",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "REVISION_IA",
+          "mode": "name"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "ESTADO_REVISION",
+              "lookupValue": "APROBADO"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        208,
+        0
+      ],
+      "id": "062a0ac2-2d95-4b0d-8518-6d3ee5c9d46e",
+      "name": "LECTOR_APROBADOS_REVISION_IA",
+      "notes": "Tipo de nodo: Google Sheets\nFunción: Leer únicamente las actividades aprobadas en la hoja REVISION_IA.\n\nEste nodo consulta el archivo Google Sheets <NOMBRE_DE_TU_LIBRO> y lee la pestaña REVISION_IA.\n\nFiltro aplicado:\n\nESTADO_REVISION = APROBADO\n\nSolo las actividades marcadas manualmente como APROBADO continúan hacia el proceso de generación de carpetas.\n\nEste nodo representa el punto de entrada del pipeline posterior a la revisión humana. La IA ya corrigió y clasificó las actividades en el workflow anterior, pero solo las filas aprobadas deben pasar a la generación documental.\n\nCampos relevantes esperados desde REVISION_IA:\n\nFECHA_ISO\nFECHA_ORIGINAL\nMES_DEL_INFORME\nACTIVIDAD_BASE\nACTIVIDAD_CORREGIDA\nTITULO_ACTIVIDAD\nOBLIGACION_PROPUESTA\nDESCRIPCION_OBLIGACION\nEVIDENCIAS_ORIGINALES\nALERTAS\nESTADO_REVISION\nEXPLICACION_CLASIFICACION\nOBSERVACIONES\nFUENTE\n\nPropósito del nodo:\n\nGarantizar que el workflow 2 trabaje únicamente con información validada por revisión humana."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Carpeta montada desde el host en el docker run (ver n8n/README.md)\nconst RUTA_BASE = \"/home/node/datos\";\n\n// Lista blanca para nombres de carpeta: letras (con tildes), números, espacio, punto, guion y guion bajo.\n// Estos valores terminan en un comando de shell, así que todo lo demás se descarta\n// (incluye $ ` ; & | \" \\ y saltos de línea).\nfunction limpiar(texto) {\n  return String(texto)\n    .normalize(\"NFC\")\n    .replace(/[^\\p{L}\\p{N} ._-]/gu, \"\")\n    .replace(/\\s+/g, \" \")\n    .replace(/^[.\\s]+|[.\\s]+$/g, \"\")\n    .slice(0, 80);\n}\n\nreturn $input.all().map(item => {\n  const data = item.json;\n\n  const fechaTexto = String(data.FECHA_ISO || \"\");\n  const fecha = /^\\d{4}-\\d{2}-\\d{2}$/.test(fechaTexto) ? fechaTexto : \"SIN_FECHA\";\n\n  const obligacionNumero = String(data.OBLIGACION_PROPUESTA || \"\").replace(/\\D/g, \"\");\n  const obligacion = obligacionNumero || \"SIN_OBLIGACION\";\n\n  const tituloBase = data.TITULO_ACTIVIDAD || data.ACTIVIDAD_CORREGIDA || data.ACTIVIDAD_BASE || \"SIN_TITULO\";\n  const tituloLimpio = limpiar(tituloBase) || \"SIN_TITULO\";\n\n  const rutaCarpeta = `${RUTA_BASE}/OBLIGACION_${obligacion}/${fecha}_${tituloLimpio}`;\n  const rutaArchivo = `${rutaCarpeta}/LEEME.txt`;\n\n  return {\n    json: {\n      ...data,\n      ruta_carpeta_docker: rutaCarpeta,\n      ruta_archivo_docker: rutaArchivo,\n      texto_evidencia: `Control de actividad: ${tituloLimpio} del día ${fecha}`\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        416,
+        0
+      ],
+      "id": "85a70186-5dc5-4610-9441-55881457fe25",
+      "name": "GENERAR_RUTAS_CARPETAS",
+      "notes": "Tipo de nodo: Code — JavaScript\nFunción: Generar rutas internas para crear carpetas por obligación y actividad.\n\nEste nodo recibe las actividades aprobadas desde LEER_APROBADOS_REVISION_IA y construye rutas de carpeta dentro del entorno donde se ejecuta n8n.\n\nPara cada actividad aprobada, toma principalmente:\n\nFECHA_ISO\nTITULO_ACTIVIDAD\nOBLIGACION_PROPUESTA\n\nLuego limpia el título con una lista blanca: solo conserva letras (con tildes), números, espacio, punto, guion y guion bajo, y lo recorta a 80 caracteres. La fecha debe tener formato AAAA-MM-DD y la obligación solo conserva dígitos.\n\nEsto es importante porque estos valores se insertan en el comando de CREAR_CARPETA_ACTIVIDAD: sin la lista blanca, un título con $(...) o comillas podría ejecutar comandos en el contenedor.\n\nCon esa información crea una ruta de carpeta en formato Docker/Linux:\n\n/home/node/datos/OBLIGACION_7/2026-04-16_Envío de documentos de la fase 1 del proyecto\n\nTambién genera la ruta de un archivo de control:\n\n/home/node/datos/OBLIGACION_7/2026-04-16_Envío de documentos de la fase 1 del proyecto/LEEME.txt\n\nEl archivo LEEME.txt se usa por ahora como evidencia de prueba para confirmar que la carpeta fue creada correctamente.\n\nOutput generado por actividad:\n\nruta_carpeta_docker\nruta_archivo_docker\ntexto_evidencia\n\nPropósito del nodo:\n\nPreparar las rutas necesarias antes de ejecutar comandos de creación de carpetas y archivos."
+    },
+    {
+      "parameters": {
+        "command": "mkdir -p \"{{ $json.ruta_carpeta_docker }}\" && echo \"{{ $json.texto_evidencia }}\" > \"{{ $json.ruta_archivo_docker }}\""
+      },
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        640,
+        0
+      ],
+      "id": "62be35ba-4654-4555-9d5f-fe4faf277770",
+      "name": "CREAR_CARPETA_ACTIVIDAD",
+      "notes": "Tipo de nodo: Execute Command\nFunción: Crear físicamente la carpeta de la actividad y escribir un archivo LEEME.txt de control.\n\nEste nodo ejecuta un comando en el entorno donde corre n8n.\n\nComando base:\n\nmkdir -p \"ruta_carpeta_docker\" && echo \"texto_evidencia\" > \"ruta_archivo_docker\"\n\nAcciones realizadas:\n\n1. Crea la carpeta de la actividad, incluyendo carpetas padre si no existen.\n2. Crea un archivo LEEME.txt dentro de la carpeta.\n3. Escribe en el archivo un texto básico de control con el título de la actividad y la fecha.\n\nEjemplo de carpeta creada:\n\n/home/node/datos/OBLIGACION_7/2026-04-16_Envío de documentos de la fase 1 del proyecto\n\nEjemplo de archivo creado:\n\nLEEME.txt\n\nPropósito del nodo:\n\nValidar que n8n puede crear carpetas y archivos en la ruta configurada para la Fábrica de Carpetas.\n\nNota técnica:\n\nEl comando solo recibe valores ya filtrados por la lista blanca de GENERAR_RUTAS_CARPETAS. Si se cambia ese nodo, hay que mantener el filtro.\n\n\nEste nodo todavía corresponde a una prueba inicial. En fases posteriores se reemplazará o ampliará para crear la estructura final GC, copiar evidencias reales, renombrarlas y generar documentos por obligación."
+    }
+  ],
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "LECTOR_APROBADOS_REVISION_IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LECTOR_APROBADOS_REVISION_IA": {
+      "main": [
+        [
+          {
+            "node": "GENERAR_RUTAS_CARPETAS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GENERAR_RUTAS_CARPETAS": {
+      "main": [
+        [
+          {
+            "node": "CREAR_CARPETA_ACTIVIDAD",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CREAR_CARPETA_ACTIVIDAD": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

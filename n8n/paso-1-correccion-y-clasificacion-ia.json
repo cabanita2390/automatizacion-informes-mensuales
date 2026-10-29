@@ -1,0 +1,370 @@
+{
+  "name": "Informes - Paso 1: Corrección y clasificación asistida por IA",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "2834a987-d9bf-4d93-be3e-3a6f33ace24d",
+      "name": "When clicking ‘Execute workflow’",
+      "notesInFlow": true,
+      "notes": "Este workflow corresponde a la fase de preparación y revisión IA del informe mensual.\n\nSu función principal es ejecutar manualmente el proceso completo de lectura, normalización, validación, corrección con IA, consolidación y escritura de actividades en la hoja REVISION_IA.\n\nFlujo general:\nManual Trigger\n↓\nLeer_Actividades\n↓\nNormalizar_Datos\n↓\nValidar_Completitud\n↓\nIA_Correctora\n↓\nConsolidar_Final\n↓\nEscribir_REVISION_IA\n\nDentro del proyecto general, este flujo hace parte del pipeline:\nGoogle Sheets → IA procesa → REVISION_IA → revisión humana → APROBADO → generación automática.\n\nEste nodo no transforma datos. Solo sirve como disparador manual del workflow."
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "<ID_DE_TU_GOOGLE_SHEET>",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Actividades_2026",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        208,
+        0
+      ],
+      "id": "a235255c-b948-48a0-b27a-e378317efb07",
+      "name": "Leer_Actividades",
+      "notesInFlow": true,
+      "notes": "Tipo de nodo: Google Sheets\nFunción: Leer las actividades base desde la hoja Actividades_2026.\n\nEste nodo consulta el archivo de Google Sheets <NOMBRE_DE_TU_LIBRO> y lee los registros de la pestaña Actividades_2026.\n\nCada fila leída representa una actividad registrada manualmente para el informe mensual.\n\nEl output de este nodo incluye campos como:\n\n{\n  \"row_number\": 2,\n  \"FECHA\": \"jueves, abril 16, 2026\",\n  \"Actividad base\": \"Se envían documentos de la fase 1 del proyecto\",\n  \"EVIDENCIA\": \"Pantallazo envío\",\n  \"MES DEL INFORME\": \"MAYO\"\n}\n\nEste nodo es la fuente inicial de datos del workflow. No corrige, no filtra y no transforma la información; solo entrega las filas tal como están registradas en la hoja."
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all();\n\n// Rango del informe: debe coincidir con el de Validar_Completitud\nconst FECHA_INICIO = new Date(\"2026-04-16T00:00:00\");\nconst FECHA_FIN = new Date(\"2026-05-13T23:59:59\");\n\nconst meses = {\n  enero: 0,\n  febrero: 1,\n  marzo: 2,\n  abril: 3,\n  mayo: 4,\n  junio: 5,\n  julio: 6,\n  agosto: 7,\n  septiembre: 8,\n  octubre: 9,\n  noviembre: 10,\n  diciembre: 11,\n};\n\nfunction parseFecha(fechaTexto) {\n  if (!fechaTexto) return null;\n\n  const partes = String(fechaTexto).toLowerCase().split(\",\");\n  if (partes.length < 3) return null;\n\n  const mesDia = partes[1].trim().split(\" \");\n  const mes = mesDia[0];\n  const dia = Number(mesDia[1]);\n  const anio = Number(partes[2].trim());\n\n  if (!(mes in meses) || !dia || !anio) return null;\n\n  return new Date(anio, meses[mes], dia);\n}\n\n// Fecha ISO en hora local (toISOString usa UTC y puede correr un día)\nfunction formatDateISO(date) {\n  const year = date.getFullYear();\n  const month = String(date.getMonth() + 1).padStart(2, '0');\n  const day = String(date.getDate()).padStart(2, '0');\n  return `${year}-${month}-${day}`;\n}\n\nconst cleaned = [];\n\nfor (const row of rows) {\n  const data = row.json;\n\n  const fecha = data[\"FECHA\"];\n  const actividad = data[\"Actividad base\"];\n  const evidencia = data[\"EVIDENCIA\"];\n  const mes_del_informe = data[\"MES DEL INFORME\"];\n\n  // Solo descarta filas completamente vacías\n  if (!fecha && !actividad && !evidencia) continue;\n\n  const alertas = [];\n\n  const fechaObj = parseFecha(fecha);\n\n  // Si no hay fecha válida, NO se elimina la actividad.\n  // Solo se agrega alerta.\n  if (!fechaObj) {\n    alertas.push(\"SIN_FECHA\");\n  }\n\n  // Solo filtra por rango cuando sí existe fecha válida\n  if (fechaObj && (fechaObj < FECHA_INICIO || fechaObj > FECHA_FIN)) {\n    continue;\n  }\n\n  const evidencias = evidencia\n    ? String(evidencia).split(\"\\n\").map(e => e.trim()).filter(Boolean)\n    : [];\n\n  if (evidencias.length === 0) {\n    alertas.push(\"SIN_EVIDENCIA\");\n  }\n\n  for (const ev of evidencias) {\n    if (!ev.includes(\".\")) {\n      alertas.push(\"EVIDENCIA_SIN_EXTENSION\");\n    }\n  }\n\n  cleaned.push({\n    json: {\n      fecha_original: fecha || \"\",\n      fecha_iso: fechaObj ? formatDateISO(fechaObj) : \"\",\n      mes_del_informe,\n      actividad_base: actividad,\n      evidencias_originales: evidencias,\n      alertas\n    }\n  });\n}\n\nreturn cleaned;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        416,
+        0
+      ],
+      "id": "22917cfe-9fa0-414b-98fe-1b065b5cab8a",
+      "name": "Normalizar_Datos",
+      "notesInFlow": true,
+      "notes": "Tipo de nodo: Code — JavaScript\nFunción: Limpiar, validar, filtrar y transformar los datos leídos desde Google Sheets.\n\nEste nodo recibe todas las filas provenientes de Leer_Actividades y las convierte en una estructura normalizada para que puedan ser procesadas por los siguientes nodos.\n\nCampos originales que toma desde Google Sheets:\n\nFECHA\nActividad base\nEVIDENCIA\nMES DEL INFORME\n\nAcciones principales:\n\n1. Descarta filas completamente vacías.\nSi una fila no tiene fecha, actividad ni evidencia, no se procesa.\n\n2. Convierte la fecha escrita en español a formato ISO.\nEjemplo:\n\njueves, abril 16, 2026\n\nse convierte en:\n\n2026-04-16\n\n3. Conserva actividades con fecha inválida o vacía.\nSi una fila tiene actividad o evidencia, pero no tiene fecha válida, no se elimina. En ese caso agrega la alerta:\n\nSIN_FECHA\n\n4. Filtra por rango del informe.\nSi la fecha es válida, solo deja pasar actividades entre:\n\n2026-04-16\n2026-05-13\n\nEl rango está fijo en el código y debe coincidir con el de Validar_Completitud.\n\n5. Separa evidencias múltiples.\nSi la celda EVIDENCIA contiene varias líneas, las convierte en una lista.\n\nEjemplo:\n\nevidencia1.jpg\nevidencia2.pdf\n\nse transforma en:\n\n[\"evidencia1.jpg\", \"evidencia2.pdf\"]\n\n6. Genera alertas básicas.\nSi no hay evidencia, agrega:\n\nSIN_EVIDENCIA\n\nSi una evidencia no tiene punto o extensión, agrega:\n\nEVIDENCIA_SIN_EXTENSION\n\nOutput generado:\n\n{\n  \"fecha_original\": \"jueves, abril 16, 2026\",\n  \"fecha_iso\": \"2026-04-16\",\n  \"mes_del_informe\": \"MAYO\",\n  \"actividad_base\": \"Se envían documentos de la fase 1 del proyecto\",\n  \"evidencias_originales\": [\"Pantallazo envío\"],\n  \"alertas\": [\"EVIDENCIA_SIN_EXTENSION\"]\n}\n\nEste nodo prepara los datos para la validación de completitud del periodo."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gpt-4o-mini\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Eres un experto en redacción técnica institucional para informes mensuales de actividades de una entidad pública.\\n\\nTu tarea es corregir la redacción de una actividad mensual y clasificarla técnicamente dentro de una de las 12 obligaciones contractuales oficiales.\\n\\nREGLAS OBLIGATORIAS:\\n-- Si el campo alertas contiene SIN_FECHA, indica en observaciones que la actividad no tiene fecha y requiere revisión manual. No inventes fecha.\\n- Si el campo alertas contiene DIA_RELLENADO_AUTOMATICAMENTE o REVISAR_ACTIVIDAD_MANUAL, indica en observaciones que la actividad fue generada automáticamente para completar un día hábil y requiere validación manual.\\n- Si existen alertas previas, no las ignores; debes reflejarlas brevemente en observaciones.\\n- En descripcion_obligacion debes copiar exactamente la descripción oficial completa de la obligación seleccionada. No escribas criterios de clasificación, explicaciones ni resúmenes en ese campo.\\n- En actividades genéricas como “Seguimiento daily”, no inventes temas específicos de reunión. Puedes mencionar de forma general revisión de avances, novedades, compromisos y procesos operativos del nodo.  \\n- NO inventes obligaciones contractuales.\\n- Usa únicamente las 12 obligaciones oficiales indicadas abajo.\\n- NUNCA agregues una obligación 13.\\n- NO modifiques la numeración oficial de las obligaciones.\\n- Clasifica usando solo el número exacto de la obligación, del 1 al 12.\\n- Redacta en estilo técnico, institucional y formal.\\n- Corrige ortografía, coherencia, formalidad, precisión y uniformidad verbal.\\n- Mejora la redacción de la actividad para que sea clara, completa y útil para informe contractual.\\n- No cambies el sentido técnico de la actividad original.\\n- No agregues información que no esté explícita o razonablemente inferida de la actividad y su evidencia.\\n- No resumas la actividad de forma excesiva.\\n- Si la evidencia no tiene extensión o parece incompleta, conserva el texto original de la evidencia y menciona la situación en observaciones.\\n- Si la actividad es genérica, clasifícala con el criterio técnico más razonable, sin forzarla artificialmente.\\n- Devuelve únicamente un objeto JSON válido. No incluyas explicaciones fuera del JSON.\\n\\nOBLIGACIONES CONTRACTUALES OFICIALES:\\n\\n1. [Descripción oficial de la obligación 1, tomada del contrato]\\n\\n2. [Descripción oficial de la obligación 2, tomada del contrato]\\n\\n3. [Descripción oficial de la obligación 3, tomada del contrato]\\n\\n4. [Descripción oficial de la obligación 4, tomada del contrato]\\n\\n5. [Descripción oficial de la obligación 5, tomada del contrato]\\n\\n6. [Descripción oficial de la obligación 6, tomada del contrato]\\n\\n7. [Descripción oficial de la obligación 7, tomada del contrato]\\n\\n8. [Descripción oficial de la obligación 8, tomada del contrato]\\n\\n9. [Descripción oficial de la obligación 9, tomada del contrato]\\n\\n10. [Descripción oficial de la obligación 10, tomada del contrato]\\n\\n11. [Descripción oficial de la obligación 11, tomada del contrato]\\n\\n12. [Descripción oficial de la obligación 12, tomada del contrato]\\n\\nCRITERIOS ESPECÍFICOS DE CLASIFICACIÓN SEGÚN LINEAMIENTOS ACTUALES:\\n\\n- Obligación 1: [criterio específico de clasificación de la obligación 1]\\n\\n- Obligación 2: [criterio específico de clasificación de la obligación 2]\\n\\n- Obligación 3: [criterio específico de clasificación de la obligación 3]\\n\\n- Obligación 4: [criterio específico de clasificación de la obligación 4]\\n\\n- Obligación 5: [criterio específico de clasificación de la obligación 5]\\n\\n- Obligación 6: [criterio específico de clasificación de la obligación 6]\\n\\n- Obligación 7: [criterio específico de clasificación de la obligación 7]\\n- Obligación 8: [criterio específico de clasificación de la obligación 8]\\n\\n- Obligación 9: [criterio específico de clasificación de la obligación 9]\\n\\n- Obligación 10: [criterio específico de clasificación de la obligación 10]\\n\\n- Obligación 11: [criterio específico de clasificación de la obligación 11]\\n\\n- Obligación 12: [criterio específico de clasificación de la obligación 12]\\n\\nCRITERIOS DE REDACCIÓN DE LA ACTIVIDAD CORREGIDA:\\n- La actividad corregida debe estar en pasado, con estilo institucional y técnico.\\n- Usa preferiblemente estructuras como: \\\"Se realizó\\\", \\\"Se participó\\\", \\\"Se desarrolló\\\", \\\"Se elaboró\\\", \\\"Se gestionó\\\", \\\"Se brindó\\\", \\\"Se ejecutó\\\", \\\"Se asistió\\\", \\\"Se llevó a cabo\\\".\\n- La redacción debe ser más completa que la actividad base, sin inventar hechos no soportados.\\n- Debe explicar la acción realizada y, cuando sea posible, su propósito institucional.\\n- Evita frases demasiado cortas como \\\"Se asistió a reunión\\\" si puedes mejorarla con el contexto disponible.\\n- Evita lenguaje informal, ambiguo o incompleto.\\n- No uses primera persona.\\n- No uses viñetas dentro de la actividad corregida.\\n\\nEJEMPLO DE REDACCIÓN ESPERADA:\\nActividad base: \\\"Se asiste a una reunión de seguimiento.\\\"\\nActividad corregida: \\\"Se asistió a la reunión de seguimiento del proyecto, en la cual se revisaron avances y se definieron compromisos.\\\"\\nTítulo esperado: \\\"Asistencia a reunión de seguimiento del proyecto\\\"\\n\\nCRITERIOS PARA EL TÍTULO DE ACTIVIDAD:\\n- Debe ser corto, técnico y descriptivo.\\n- Debe iniciar preferiblemente con un sustantivo de acción, por ejemplo: \\\"Asistencia\\\", \\\"Participación\\\", \\\"Seguimiento\\\", \\\"Elaboración\\\", \\\"Gestión\\\", \\\"Evaluación\\\", \\\"Desarrollo\\\", \\\"Actualización\\\", \\\"Orientación\\\".\\n- No debe ser una oración larga.\\n- No debe terminar en punto.\\n- Debe representar claramente la actividad realizada.\\n\\nFORMATO DE RESPUESTA:\\nDevuelve únicamente este JSON, sin texto adicional:\\n{\\n  \\\"obligacion\\\": \\\"\\\",\\n  \\\"descripcion_obligacion\\\": \\\"\\\",\\n  \\\"actividad_corregida\\\": \\\"\\\",\\n  \\\"titulo_actividad\\\": \\\"\\\",\\n  \\\"evidencias\\\": \\\"\\\",\\n  \\\"explicacion_clasificacion\\\": \\\"\\\",\\n  \\\"observaciones\\\": \\\"\\\"\\n}\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Fecha original: \\\"{{$json.fecha_original || ''}}\\\"\\nFecha ISO: \\\"{{$json.fecha_iso || ''}}\\\"\\nActividad base: \\\"{{$json.actividad_base}}\\\"\\nEvidencias originales: \\\"{{$json.evidencias_originales.join(', ')}}\\\"\\nAlertas detectadas previamente: \\\"{{$json.alertas.join(', ')}}\\\"\\n\\nIMPORTANTE:\\nSi existen alertas detectadas previamente, debes tenerlas en cuenta y mencionarlas brevemente en el campo observaciones. No las elimines ni las ignores.\\n\\nCorrige la actividad base dándole una mejor redacción técnica, institucional, clara y completa, sin cambiar su sentido. Genera también un título corto de actividad con estilo similar a este ejemplo: \\\"Asistencia a reunión de seguimiento del proyecto\\\".\\n\\nLuego clasifica la actividad en una sola obligación oficial del 1 al 12, usando los criterios específicos definidos en el mensaje del sistema.\\n\\nResponde únicamente en JSON válido con esta estructura:\\n{\\n  \\\"obligacion\\\": \\\"\\\",\\n  \\\"descripcion_obligacion\\\": \\\"\\\",\\n  \\\"actividad_corregida\\\": \\\"\\\",\\n  \\\"titulo_actividad\\\": \\\"\\\",\\n  \\\"evidencias\\\": \\\"\\\",\\n  \\\"explicacion_clasificacion\\\": \\\"\\\",\\n  \\\"observaciones\\\": \\\"\\\"\\n}\"\n    }\n  ],\n  \"response_format\": {\n    \"type\": \"json_object\"\n  },\n  \"temperature\": 0\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        816,
+        0
+      ],
+      "id": "1c872e33-8365-46d0-945b-ff89e2ae6213",
+      "name": "IA_Correctora",
+      "notesInFlow": true,
+      "notes": "Tipo de nodo: HTTP Request\nFunción: Enviar cada actividad a OpenAI para corrección, titulación y clasificación contractual.\n\nEste nodo hace una solicitud POST a la API de OpenAI para procesar cada actividad proveniente de Validar_Completitud.\n\nModelo usado:\n\ngpt-4o-mini\n\nInformación enviada a la IA por cada actividad:\n\nFecha original\nFecha ISO\nActividad base\nEvidencias originales\nAlertas detectadas previamente\n\nEjemplo:\n\nFecha original: \"lunes, abril 20, 2026\"\nFecha ISO: \"2026-04-20\"\nActividad base: \"Seguimiento daily\"\nEvidencias originales: \"reunion_seguimiento.jpg\"\nAlertas detectadas previamente: \"\"\n\nTareas de la IA:\n\n1. Corregir la redacción de la actividad en estilo técnico, institucional y formal.\n2. Generar un título corto y descriptivo de la actividad.\n3. Clasificar la actividad en una sola obligación oficial del 1 al 12.\n4. Copiar la descripción oficial completa de la obligación seleccionada.\n5. Conservar o normalizar las evidencias originales.\n6. Generar observaciones cuando existan alertas previas.\n7. Devolver la respuesta únicamente en JSON válido.\n\nEstructura esperada de respuesta:\n\n{\n  \"obligacion\": \"\",\n  \"descripcion_obligacion\": \"\",\n  \"actividad_corregida\": \"\",\n  \"titulo_actividad\": \"\",\n  \"evidencias\": \"\",\n  \"explicacion_clasificacion\": \"\",\n  \"observaciones\": \"\"\n}\n\nReglas clave aplicadas:\n\n- No inventar obligaciones.\n- Usar únicamente las 12 obligaciones oficiales.\n- Nunca crear obligación 13.\n- No modificar la numeración oficial.\n- Clasificar según los criterios por obligación definidos en el prompt.\n- Reflejar alertas previas en observaciones."
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nreturn items.map((item, index) => {\n  try {\n    // 1. Extraer respuesta de la IA\n    const rawText = item.json.choices?.[0]?.message?.content;\n    if (!rawText) throw new Error(\"Respuesta de IA vacía\");\n\n    // 2. Limpiar y parsear JSON de la IA\n    const parsedIA = JSON.parse(\n      rawText\n        .replace(/```json/g, \"\")\n        .replace(/```/g, \"\")\n        .trim()\n    );\n\n    // 3. Recuperar datos originales desde Validar_Completitud\n    const originalRef = $item(index).$node[\"Validar_Completitud\"].json;\n\n    // 4. Normalizar evidencias\n    const evidenciasOriginales = Array.isArray(originalRef.evidencias_originales)\n      ? originalRef.evidencias_originales.join(\", \")\n      : \"\";\n\n    // 5. Normalizar alertas\n    const alertas = Array.isArray(originalRef.alertas)\n      ? originalRef.alertas\n      : [];\n\n    // 6. Construir observaciones finales sin duplicar explicación\n    const observaciones = [];\n\n    if (parsedIA.observaciones) {\n      observaciones.push(parsedIA.observaciones);\n    }\n\n    if (alertas.length > 0) {\n      const observacionesTexto = observaciones.join(\" \").toUpperCase();\n\n      for (const alerta of alertas) {\n        if (!observacionesTexto.includes(alerta.toUpperCase())) {\n          observaciones.push(`Alerta: ${alerta}`);\n        }\n      }\n    }\n\n    return {\n      json: {\n        fecha: originalRef.fecha_iso || \"\",\n        fecha_original: originalRef.fecha_original || originalRef.fecha_iso || \"\",\n        mes_del_informe: originalRef.mes_del_informe || \"MAYO\",\n\n        obligacion: parsedIA.obligacion || \"\",\n        descripcion_obligacion: parsedIA.descripcion_obligacion || \"\",\n\n        actividad_original: originalRef.actividad_base || \"\",\n        actividad_corregida: parsedIA.actividad_corregida || \"\",\n        titulo_actividad: parsedIA.titulo_actividad || \"\",\n\n        evidencias: parsedIA.evidencias || evidenciasOriginales,\n\n        estado_revision: \"PENDIENTE\",\n        explicacion_clasificacion: parsedIA.explicacion_clasificacion || \"\",\n        observaciones: observaciones.join(\" | \"),\n\n        fuente: \"Actividades_2026\",\n        alertas: alertas\n      }\n    };\n\n  } catch (error) {\n    return {\n      json: {\n        error: \"Error en sincronización\",\n        detalle: error.message,\n        indice: index,\n        estado_revision: \"ERROR\"\n      }\n    };\n  }\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1008,
+        0
+      ],
+      "id": "3e5aa14e-d84d-484e-a6aa-ac574832a6c9",
+      "name": "Consolidar_Final",
+      "notesInFlow": true,
+      "notes": "Tipo de nodo: Code — JavaScript\nFunción: Consolidar la respuesta de IA con los datos originales de la actividad.\n\nEste nodo recibe la respuesta generada por IA_Correctora y la convierte en un registro final estructurado para escritura en REVISION_IA.\n\nAcciones principales:\n\n1. Extrae el contenido de la respuesta de OpenAI desde:\n\nchoices[0].message.content\n\n2. Limpia posibles marcas de bloque como:\nConvierte la respuesta de texto de la IA en un objeto JSON.\nRecupera los datos originales desde el nodo Validar_Completitud.\nNormaliza las evidencias originales en formato de texto.\nNormaliza las alertas como lista.\nConstruye observaciones finales sin duplicar innecesariamente la explicación de clasificación.\nConserva los campos nuevos generados por la IA:\n\ndescripcion_obligacion\nexplicacion_clasificacion\n\nDefine el estado de revisión como:\n\nPENDIENTE\n\nOutput generado:\n\n{\n\"fecha\": \"2026-04-16\",\n\"fecha_original\": \"jueves, abril 16, 2026\",\n\"mes_del_informe\": \"MAYO\",\n\"obligacion\": \"7\",\n\"descripcion_obligacion\": \"[Descripción oficial de la obligación 7]\",\n\"actividad_original\": \"Se envían documentos de la fase 1 del proyecto\",\n\"actividad_corregida\": \"Se realizaron y remitieron...\",\n\"titulo_actividad\": \"Envío de documentos de la fase 1 del proyecto\",\n\"evidencias\": \"Pantallazo envío\",\n\"estado_revision\": \"PENDIENTE\",\n\"explicacion_clasificacion\": \"\",\n\"observaciones\": \"Alerta: EVIDENCIA_SIN_EXTENSION\",\n\"fuente\": \"Actividades_2026\",\n\"alertas\": [\"EVIDENCIA_SIN_EXTENSION\"]\n}\n\nManejo de errores:\n\nSi la respuesta de IA viene vacía, inválida o no puede convertirse a JSON, el nodo devuelve un registro con:\n\n{\n\"error\": \"Error en sincronización\",\n\"detalle\": \"mensaje del error\",\n\"indice\": 0,\n\"estado_revision\": \"ERROR\"\n}\n\nPropósito del nodo:\n\nCentralizar la salida final antes de escribir en Google Sheets, evitando que Escribir_REVISION_IA dependa directamente de nodos anteriores."
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1. Rango del informe de mayo: debe coincidir con el de Normalizar_Datos\n// (hora local; new Date('AAAA-MM-DD') se interpreta en UTC)\nconst fechaInicio = new Date('2026-04-16T00:00:00');\nconst fechaFin = new Date('2026-05-13T00:00:00');\n\n// 2. Configuración del informe\nconst MES_DEL_INFORME = \"MAYO\";\n\n// 3. Lista de festivos en Colombia para este periodo\nconst festivos = ['2026-05-01'];\n\nconst items = $input.all();\nconst actividadesExistentes = items\n  .map(item => item.json.fecha_iso)\n  .filter(Boolean);\n\nconst resultados = [...items];\n\n// 4. Función para formatear fecha ISO sin desfase\nfunction formatDateISO(date) {\n  const year = date.getFullYear();\n  const month = String(date.getMonth() + 1).padStart(2, '0');\n  const day = String(date.getDate()).padStart(2, '0');\n  return `${year}-${month}-${day}`;\n}\n\n// 5. Recorrer los días del periodo\nlet fechaActual = new Date(fechaInicio);\n\nwhile (fechaActual <= fechaFin) {\n  const isoDate = formatDateISO(fechaActual);\n  const diaSemana = fechaActual.getDay(); // 0: domingo, 6: sábado\n\n  const esHabil = diaSemana !== 0 && diaSemana !== 6;\n  const esFestivo = festivos.includes(isoDate);\n\n  if (esHabil && !esFestivo) {\n    if (!actividadesExistentes.includes(isoDate)) {\n      resultados.push({\n        json: {\n          fecha_original: isoDate,\n          fecha_iso: isoDate,\n          mes_del_informe: MES_DEL_INFORME,\n          actividad_base: \"Seguimiento daily (DAILY)\",\n          evidencias_originales: [],\n          alertas: [\n            \"DIA_RELLENADO_AUTOMATICAMENTE\",\n            \"REVISAR_ACTIVIDAD_MANUAL\"\n          ],\n          es_automatico: true\n        }\n      });\n    }\n  }\n\n  fechaActual.setDate(fechaActual.getDate() + 1);\n}\n\n// 6. Ordenar por fecha\nreturn resultados.sort((a, b) => {\n  const fechaA = a.json.fecha_iso || \"\";\n  const fechaB = b.json.fecha_iso || \"\";\n  return new Date(fechaA) - new Date(fechaB);\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        608,
+        0
+      ],
+      "id": "9bd7c085-b11a-47c2-977e-ae57b3030b24",
+      "name": "Validar_Completitud",
+      "notesInFlow": true,
+      "notes": "Tipo de nodo: Code — JavaScript\nFunción: Revisar que el periodo del informe tenga actividades registradas en todos los días hábiles.\n\nEste nodo recibe las actividades normalizadas desde Normalizar_Datos y verifica si faltan registros en los días hábiles del periodo configurado.\n\nPeriodo validado actualmente:\n\nFecha inicial: 2026-04-16\nFecha final:   2026-05-13\n\nFestivos configurados:\n\n2026-05-01\n\nQué valida:\n\nEl nodo recorre día por día el periodo definido. Para cada fecha revisa si es:\n\nlunes a viernes\nno festivo\n\nSi el día es hábil y no existe ninguna actividad registrada para esa fecha, crea una actividad automática de relleno.\n\nActividad automática creada:\n\nSeguimiento daily (DAILY)\n\nCampos agregados a la actividad automática:\n\nfecha_original\nfecha_iso\nmes_del_informe\nactividad_base\nevidencias_originales\nalertas\nes_automatico\n\nAlertas agregadas a los días rellenados:\n\nDIA_RELLENADO_AUTOMATICAMENTE\nREVISAR_ACTIVIDAD_MANUAL\n\nPropósito del nodo:\n\nEste nodo evita que el informe quede con días hábiles vacíos. Las actividades creadas automáticamente no quedan aprobadas; se envían a REVISION_IA con estado PENDIENTE para validación humana."
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "<ID_DE_TU_GOOGLE_SHEET>",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "REVISION_IA",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "FECHA_ISO": "={{ $json.fecha }}",
+            "FECHA_ORIGINAL": "={{ $json.fecha_original }}",
+            "MES_DEL_INFORME": "={{ $json.mes_del_informe }}",
+            "ACTIVIDAD_BASE": "={{ $json.actividad_original }}",
+            "ACTIVIDAD_CORREGIDA": "={{ $json.actividad_corregida }}",
+            "TITULO_ACTIVIDAD": "={{ $json.titulo_actividad }}",
+            "OBLIGACION_PROPUESTA": "={{ $json.obligacion }}",
+            "DESCRIPCION_OBLIGACION": "={{ $json.descripcion_obligacion }}",
+            "EVIDENCIAS_ORIGINALES": "={{ $json.evidencias }}",
+            "ALERTAS": "={{ ($json.alertas || []).join(', ') }}",
+            "ESTADO_REVISION": "={{ $json.estado_revision }}",
+            "EXPLICACION_CLASIFICACION": "={{ $json.explicacion_clasificacion }}",
+            "OBSERVACIONES": "={{ $json.observaciones }}",
+            "FUENTE": "={{ $json.fuente }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "FECHA_ISO",
+              "displayName": "FECHA_ISO",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "FECHA_ORIGINAL",
+              "displayName": "FECHA_ORIGINAL",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "MES_DEL_INFORME",
+              "displayName": "MES_DEL_INFORME",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ACTIVIDAD_BASE",
+              "displayName": "ACTIVIDAD_BASE",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ACTIVIDAD_CORREGIDA",
+              "displayName": "ACTIVIDAD_CORREGIDA",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "TITULO_ACTIVIDAD",
+              "displayName": "TITULO_ACTIVIDAD",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "OBLIGACION_PROPUESTA",
+              "displayName": "OBLIGACION_PROPUESTA",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "DESCRIPCION_OBLIGACION",
+              "displayName": "DESCRIPCION_OBLIGACION",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "EVIDENCIAS_ORIGINALES",
+              "displayName": "EVIDENCIAS_ORIGINALES",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ALERTAS",
+              "displayName": "ALERTAS",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ESTADO_REVISION",
+              "displayName": "ESTADO_REVISION",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "EXPLICACION_CLASIFICACION",
+              "displayName": "EXPLICACION_CLASIFICACION",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "OBSERVACIONES",
+              "displayName": "OBSERVACIONES",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "FUENTE",
+              "displayName": "FUENTE",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1216,
+        0
+      ],
+      "id": "d353e993-91e2-42cb-99ed-ee913a7d55f5",
+      "name": "Escribir_REVISION_IA",
+      "notesInFlow": true,
+      "notes": "Tipo de nodo: Google Sheets\nFunción: Escribir en REVISION_IA el resultado final de la corrección y clasificación realizada por IA.\n\nEste nodo recibe los registros consolidados desde Consolidar_Final y agrega una fila por cada actividad en la hoja REVISION_IA del archivo <NOMBRE_DE_TU_LIBRO>.\n\nCampos escritos en la hoja:\n\nFECHA_ISO\nFECHA_ORIGINAL\nMES_DEL_INFORME\nACTIVIDAD_BASE\nACTIVIDAD_CORREGIDA\nTITULO_ACTIVIDAD\nOBLIGACION_PROPUESTA\nDESCRIPCION_OBLIGACION\nEVIDENCIAS_ORIGINALES\nALERTAS\nESTADO_REVISION\nEXPLICACION_CLASIFICACION\nOBSERVACIONES\nFUENTE\n\nMapeo principal:\n\nFECHA_ISO                 ← $json.fecha\nFECHA_ORIGINAL            ← $json.fecha_original\nMES_DEL_INFORME           ← $json.mes_del_informe\nACTIVIDAD_BASE            ← $json.actividad_original\nACTIVIDAD_CORREGIDA       ← $json.actividad_corregida\nTITULO_ACTIVIDAD          ← $json.titulo_actividad\nOBLIGACION_PROPUESTA      ← $json.obligacion\nDESCRIPCION_OBLIGACION    ← $json.descripcion_obligacion\nEVIDENCIAS_ORIGINALES     ← $json.evidencias\nALERTAS                   ← $json.alertas.join(', ')\nESTADO_REVISION           ← $json.estado_revision\nEXPLICACION_CLASIFICACION ← $json.explicacion_clasificacion\nOBSERVACIONES             ← $json.observaciones\nFUENTE                    ← $json.fuente\n\nEstado de salida:\n\nTodos los registros quedan con ESTADO_REVISION = PENDIENTE.\n\nEsto es intencional, porque la IA solo propone corrección, título y obligación. La aprobación final debe realizarse manualmente en REVISION_IA antes de continuar al pipeline de generación documental."
+    }
+  ],
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Leer_Actividades",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer_Actividades": {
+      "main": [
+        [
+          {
+            "node": "Normalizar_Datos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar_Datos": {
+      "main": [
+        [
+          {
+            "node": "Validar_Completitud",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IA_Correctora": {
+      "main": [
+        [
+          {
+            "node": "Consolidar_Final",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consolidar_Final": {
+      "main": [
+        [
+          {
+            "node": "Escribir_REVISION_IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar_Completitud": {
+      "main": [
+        [
+          {
+            "node": "IA_Correctora",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
